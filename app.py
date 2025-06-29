@@ -67,14 +67,21 @@ with st.sidebar:
     
     st.markdown("## Logistics Dashboard")
     
+    # Initialize session state for selected tab
+    if 'selected_tab' not in st.session_state:
+        st.session_state.selected_tab = "🏪 Dashboard"
+    
     # Navigation
     selected_tab = option_menu(
         "Navigation",
         list(TABS.keys()),
-        icons=['box', 'journal', 'truck', 'building', 'cpu'],
+        icons=['house', 'box', 'journal', 'truck', 'building', 'cpu'],
         menu_icon="list",
-        default_index=0,
+        default_index=list(TABS.keys()).index(st.session_state.selected_tab) if st.session_state.selected_tab in TABS.keys() else 0,
     )
+    
+    # Update session state
+    st.session_state.selected_tab = selected_tab
     
     # Space
     st.markdown("---")

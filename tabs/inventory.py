@@ -1,11 +1,14 @@
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from utils.api import get_data, post_data, put_data
+from utils.api import get_data, post_data, put_data, get_integrated_dashboard_data
 from utils.helpers import display_kpi_metrics, plot_category_pie_chart, show_notification
 
 def app():
     st.header("📚 Inventory Management")
+    
+    # Integration Status Banner
+    st.info("🔄 **Real-time Inventory**: Stock levels update automatically when orders are placed!")
     
     # Get inventory data
     inventory = get_data("inventory")
@@ -71,14 +74,16 @@ def app():
                             current_item = next((item for item in inventory if item['sku'] == selected_sku), None)
                             
                             if current_item:
-                                new_quantity = current_item['quantity'] + quantity_change
+                                # Use stock_quantity for MongoDB compatibility
+                                current_qty = current_item.get('stock_quantity', current_item.get('quantity', 0))
+                                new_quantity = current_qty + quantity_change
                                 
                                 if new_quantity >= 0:
-                                    success, _ = put_data(f"inventory/{selected_sku}", {"quantity": new_quantity})
+                                    success, _ = put_data("inventory", selected_sku, {"stock_quantity": new_quantity})
                                     
                                     if success:
                                         show_notification(f"Updated {selected_sku} stock to {new_quantity}", "success")
-                                        st.experimental_rerun()
+                                        st.rerun()
                                     else:
                                         show_notification("Failed to update inventory", "error")
                                 else:
@@ -127,7 +132,7 @@ def app():
                     success, _ = post_data("inventory", new_item)
                     if success:
                         show_notification(f"Added new SKU: {sku}", "success")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         show_notification("Failed to add new SKU", "error")
                 else:

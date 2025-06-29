@@ -9,6 +9,9 @@ from utils.helpers import display_kpi_metrics, show_notification
 def app():
     st.header("🏢 Warehouse Management")
     
+    # Integration Status Banner
+    st.info("🔄 **Smart Warehouse Integration**: Picking tasks are automatically created when orders are placed!")
+    
     # Get warehouse data
     warehouse_data = get_data("warehouse")
     inventory_data = get_data("inventory")
@@ -298,4 +301,4 @@ def app():
             st.info("This is a simulated heatmap showing hypothetical activity levels. Connect to real warehouse data for accurate visualization.")
             
             if st.button("Generate New Simulation"):
-                st.experimental_rerun()
+                st.rerun()
