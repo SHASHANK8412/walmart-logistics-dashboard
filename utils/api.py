@@ -378,6 +378,19 @@ def create_integrated_order(order_data):
             integration_status = result.get("data", {}).get("integration_status")
             details = result.get("data", {}).get("details", {})
             
+            # Store inventory update info in session state for display in inventory tab
+            if details.get("inventory"):
+                inv = details["inventory"]
+                st.session_state.last_inventory_update = {
+                    'product_name': order_data.get('product_name'),
+                    'quantity_deducted': order_data.get('quantity'),
+                    'previous_stock': inv.get('new_stock_level', 0) + order_data.get('quantity', 0),
+                    'current_stock': inv.get('new_stock_level', 0),
+                    'order_id': order.get('order_id', f"ORD-{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"),
+                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'low_stock_alert': inv.get('low_stock_alert', False)
+                }
+            
             # Show integration details
             if details:
                 st.success("🔄 **System Integration Complete!**")
@@ -397,6 +410,39 @@ def create_integrated_order(order_data):
                     wh = details["warehouse"]
                     st.info(f"🏪 **Warehouse**: Added to picking queue {wh.get('picking_id')} at {wh.get('location')}. "
                            f"Assigned to {wh.get('assigned_worker')}")
+                    
+                    # AUTO-GENERATE WAREHOUSE RECEIPT
+                    from utils.receipts import auto_generate_warehouse_receipt, display_auto_receipt
+                    
+                    # Prepare warehouse receipt data
+                    warehouse_receipt_data = {
+                        "order_id": order.get('order_id', ''),
+                        "picking_id": wh.get('picking_id', ''),
+                        "customer_name": order.get('customer_name', ''),
+                        "delivery_address": order.get('delivery_address', ''),
+                        "warehouse_location": wh.get('location', 'Main Warehouse'),
+                        "zone": wh.get('zone', 'A1'),
+                        "assigned_worker": wh.get('assigned_worker', ''),
+                        "delivery_id": details.get("delivery", {}).get('delivery_id', ''),
+                        "agent_assigned": details.get("delivery", {}).get('agent_assigned', ''),
+                        "eta": details.get("delivery", {}).get('eta', ''),
+                        "items": [{
+                            "name": order.get('product_name', 'Unknown Product'),
+                            "quantity": order.get('quantity', 1),
+                            "location": wh.get('location', 'Unknown'),
+                            "status": "PICKED"
+                        }],
+                        "total_weight": order.get('quantity', 1) * 2.5,  # Estimate 2.5 lbs per item
+                        "packaging_type": "Standard Box"
+                    }
+                    
+                    # Generate warehouse receipt
+                    warehouse_receipt_result = auto_generate_warehouse_receipt(warehouse_receipt_data)
+                    
+                    # Display the warehouse receipt
+                    st.markdown("---")
+                    st.markdown("### 🏪 **AUTOMATIC WAREHOUSE RECEIPT**")
+                    display_auto_receipt(warehouse_receipt_result)
             
             return True, order, integration_status
         else:
@@ -837,3 +883,126 @@ def get_google_maps_integration_status():
             "integration_active": False,
             "error": str(e)
         }
+
+def update_inventory_on_order(product_name, quantity_ordered):
+    """Update inventory when an order is placed"""
+    try:
+        # Get current inventory to find the product
+        inventory = get_data("inventory")
+        if not inventory:
+            return False, "Could not fetch inventory data"
+        
+        # Find the product in inventory
+        product_item = None
+        for item in inventory:
+            if (item.get('product_name', '').lower() == product_name.lower() or 
+                item.get('name', '').lower() == product_name.lower()):
+                product_item = item
+                break
+        
+        if not product_item:
+            # Create new inventory item if not found
+            new_item = {
+                "sku": f"SKU-{product_name.upper().replace(' ', '-')}",
+                "product_name": product_name,
+                "name": product_name,
+                "stock_quantity": max(0, 100 - quantity_ordered),  # Default stock minus order
+                "quantity": max(0, 100 - quantity_ordered),
+                "min_stock_level": 10,
+                "price": 0.0,
+                "category": "General",
+                "bin_location": "A1-01",
+                "supplier": "Default Supplier",
+                "cost_price": 0.0,
+                "selling_price": 0.0,
+                "last_updated": datetime.datetime.now().isoformat()
+            }
+            
+            success, _ = post_data("inventory", new_item)
+            if success:
+                return True, {
+                    'product_name': product_name,
+                    'quantity_deducted': quantity_ordered,
+                    'previous_stock': 100,
+                    'current_stock': max(0, 100 - quantity_ordered),
+                    'low_stock_alert': (100 - quantity_ordered) < 10,
+                    'order_id': f"ORD-{random.randint(1000, 9999)}",
+                    'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'action': 'new_item_created'
+                }
+            else:
+                return False, "Failed to create new inventory item"
+        
+        # Update existing inventory item
+        current_stock = product_item.get('stock_quantity', product_item.get('quantity', 0))
+        new_stock = max(0, current_stock - quantity_ordered)
+        
+        # Update the inventory item
+        update_data = {
+            "stock_quantity": new_stock,
+            "quantity": new_stock,
+            "last_updated": datetime.datetime.now().isoformat()
+        }
+        
+        sku = product_item.get('sku', '')
+        success, _ = put_data("inventory", sku, update_data)
+        
+        if success:
+            # Store the update info in session state for notification
+            update_info = {
+                'product_name': product_name,
+                'quantity_deducted': quantity_ordered,
+                'previous_stock': current_stock,
+                'current_stock': new_stock,
+                'low_stock_alert': new_stock < product_item.get('min_stock_level', 10),
+                'order_id': f"ORD-{random.randint(1000, 9999)}",
+                'timestamp': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                'action': 'stock_deducted'
+            }
+            
+            # Store in session state for inventory tab notification
+            if 'inventory_updates' not in st.session_state:
+                st.session_state.inventory_updates = []
+            
+            st.session_state.inventory_updates.append(update_info)
+            st.session_state.last_inventory_update = update_info
+            
+            return True, update_info
+        else:
+            return False, "Failed to update inventory"
+            
+    except Exception as e:
+        return False, f"Error updating inventory: {str(e)}"
+
+def create_order_with_inventory_update(order_data):
+    """Create order and automatically update inventory"""
+    try:
+        # Extract product info
+        product_name = order_data.get('product_name', '')
+        quantity = order_data.get('quantity', 1)
+        
+        # Update inventory first
+        inventory_success, inventory_result = update_inventory_on_order(product_name, quantity)
+        
+        # Create the order
+        order_success, order_result = post_data("orders", order_data)
+        
+        if order_success and inventory_success:
+            return True, {
+                'order': order_result,
+                'inventory_update': inventory_result,
+                'success': True,
+                'message': f"Order created and inventory updated for {product_name}"
+            }
+        elif order_success and not inventory_success:
+            return True, {
+                'order': order_result,
+                'inventory_update': None,
+                'success': True,
+                'message': f"Order created but inventory update failed: {inventory_result}"
+            }
+        else:
+            return False, f"Failed to create order: {order_result}"
+            
+    except Exception as e:
+        return False, f"Error creating order with inventory update: {str(e)}"
